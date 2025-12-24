@@ -55,7 +55,7 @@ export default function LoginScreen() {
       } else {
         Alert.alert('Gagal', 'Email atau Password salah.');
       }
-    } catch (error) {
+    } catch {
       Alert.alert('Error', 'Terjadi kesalahan sistem.');
     } finally {
       setLoading(false);
