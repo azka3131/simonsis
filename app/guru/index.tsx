@@ -6,8 +6,8 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { db } from '../../firebaseConfig'; 
-// Perhatikan import baru: setDoc dan doc
-import { collection, query, where, orderBy, onSnapshot, doc, setDoc, Timestamp } from 'firebase/firestore'; 
+// REVISI: Tambahkan getDoc untuk mengecek data yang sudah ada
+import { collection, query, where, orderBy, onSnapshot, doc, setDoc, getDoc, Timestamp } from 'firebase/firestore'; 
 import { Ionicons } from '@expo/vector-icons';
 
 export default function GuruDashboard() {
@@ -28,16 +28,51 @@ export default function GuruDashboard() {
       orderBy('nama', 'asc')
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
       const studentsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       }));
       setStudents(studentsData);
       
-      const initialAbsen = {};
-      studentsData.forEach(s => { initialAbsen[s.id] = 'H'; });
-      setAttendanceData(initialAbsen);
+      // --- LOGIKA BARU UNTUK RESTORE DATA ---
+      // 1. Tentukan ID Dokumen hari ini
+      const today = new Date().toISOString().split('T')[0];
+      const customDocID = `${today}_Kelas${kelasAktif}`;
+      
+      try {
+        // 2. Cek ke database apakah sudah pernah absen hari ini?
+        const docRef = doc(db, 'attendance_recap', customDocID);
+        const docSnap = await getDoc(docRef);
+
+        if (docSnap.exists() && docSnap.data().details) {
+          // 3A. JIKA ADA: Gabungkan data tersimpan dengan data siswa terbaru
+          // (Mengantisipasi jika ada siswa baru masuk tapi belum diabsen)
+          const savedAttendance = docSnap.data().details;
+          const mergedAttendance = {};
+
+          studentsData.forEach(s => {
+            // Pakai data tersimpan jika ada, jika tidak default 'H'
+            mergedAttendance[s.id] = savedAttendance[s.id] || 'H';
+          });
+          
+          setAttendanceData(mergedAttendance);
+          // Opsional: Beri tahu guru bahwa data lama dimuat
+          // Alert.alert("Info", "Data absensi hari ini berhasil dimuat kembali.");
+        } else {
+          // 3B. JIKA BELUM ADA: Set default semua Hadir (H)
+          const initialAbsen = {};
+          studentsData.forEach(s => { initialAbsen[s.id] = 'H'; });
+          setAttendanceData(initialAbsen);
+        }
+      } catch (error) {
+        console.log("Gagal memuat data lama:", error);
+        // Fallback jika error
+        const initialAbsen = {};
+        studentsData.forEach(s => { initialAbsen[s.id] = 'H'; });
+        setAttendanceData(initialAbsen);
+      }
+      
       setLoading(false);
     });
     return () => unsubscribe();
@@ -53,7 +88,7 @@ export default function GuruDashboard() {
   };
 
   const handleSubmitAttendance = async () => {
-    Alert.alert('Konfirmasi', `Simpan absensi Kelas ${kelasAktif}?`, [
+    Alert.alert('Konfirmasi', `Simpan / Perbarui absensi Kelas ${kelasAktif}?`, [
       { text: 'Batal', style: 'cancel' },
       { 
         text: 'Ya, Simpan', 
@@ -67,14 +102,10 @@ export default function GuruDashboard() {
               if (status === 'A') alpha++;
             });
 
-            // --- PERBAIKAN LOGIKA DISINI ---
-            // Kita buat ID Unik: TANGGAL + KELAS
-            // Contoh ID: "2023-12-20_Kelas1"
             const today = new Date().toISOString().split('T')[0];
             const customDocID = `${today}_Kelas${kelasAktif}`;
 
-            // Gunakan setDoc (bukan addDoc). 
-            // setDoc akan membuat baru jika belum ada, atau MENIMPA jika sudah ada.
+            // Gunakan setDoc dengan opsi merge: true agar aman
             await setDoc(doc(db, 'attendance_recap', customDocID), {
               date: today,
               timestamp: Timestamp.now(),
@@ -83,9 +114,11 @@ export default function GuruDashboard() {
               total_sakit: sakit,
               total_izin: izin,
               total_alpha: alpha,
-            });
+              // REVISI: PENTING! Simpan detail per siswa
+              details: attendanceData 
+            }, { merge: true });
 
-            Alert.alert('Berhasil', 'Data berhasil diperbarui/disimpan!');
+            Alert.alert('Berhasil', 'Data berhasil diperbarui! Siswa terlambat sudah tercatat.');
           } catch (error) {
             Alert.alert('Error', error.message);
           }
@@ -153,7 +186,7 @@ export default function GuruDashboard() {
   );
 }
 
-// Styles tetap sama seperti sebelumnya...
+// Styles tidak berubah, gunakan yang lama
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f8f9fa' },
   header: { backgroundColor: '#27ae60', paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', elevation: 4 },
